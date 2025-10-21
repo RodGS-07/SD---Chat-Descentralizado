@@ -8,7 +8,7 @@ try:
     client_socket.connect(('localhost', 65432))
 
     # Envia uma mensagem
-    message = "Olá, servidor!"
+    message = "POLAR!"
     client_socket.send(message.encode('utf-8'))
 
     # Recebe a resposta do servidor
