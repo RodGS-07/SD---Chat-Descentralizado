@@ -1,5 +1,40 @@
 import socket
+from threading import Thread
 
+def inicia_servidor(IP,PORTA,nome_usuario):
+
+    # Inicia servidor do peer
+    server_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    server_socket.bind((IP,PORTA))
+    server_socket.listen(5)
+
+    #print("Servidor do peer 2 iniciado, aguardando conexões...")
+
+    while True:
+        # Inicia conexão com outros peers
+        client_socket, client_address = server_socket.accept()
+        #print(f"Conexão estabelecida com {client_address}")
+
+        # Recebe dados do cliente
+        data = client_socket.recv(1024)
+        decoded_data = data.decode('utf-8')
+        print(f"> {decoded_data}")
+
+        client_socket.close()
+
+def cliente(IP,PORTA,nome_usuario, mensagem):
+
+    # Inicia conexão com servidores de outros peers
+    client_socket = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+    client_socket.connect((IP,PORTA))
+
+    # Envia mensagem
+    msg = f"{nome_usuario}\n{mensagem}\n\n"
+    client_socket.send(msg.encode('utf-8'))
+
+    client_socket.close()
+
+'''
 class Peer:
     def __init__(self, id, nickname, coordenador, IP, PORTA):
         self.id = id
@@ -33,6 +68,9 @@ class Peer:
                 decoded_data = data.decode('utf-8')
                 if decoded_data == 'exit' or decoded_data == 'sair':
                     print("Encerrando servidor...")
+                    response = "Servidor encerrado"
+                    client_socket.send(response.encode('utf-8'))
+                    client_socket.close()
                     break
                 else:
                     print(f"Recebido: {decoded_data}")
@@ -74,20 +112,35 @@ class Peer:
         finally:
             # Fecha o socket
             client_socket.close()
-
+'''
 
 def main():
-    IP_SERVIDOR = 'localhost'
+    IP_LOCAL = 'localhost'
+    PORTA_LOCAL = 5001
+
+    IP_DESTINO = input("Digite o IP de destino: ")
+    PORTA_DESTINO = int(input("Digite a porta de destino: "))
+
+    # Inicia o servidor em paralelo
+    Thread(target=inicia_servidor, args=(IP_LOCAL, PORTA_LOCAL,"Yussi"), daemon=True).start()
+
+    print("Chat iniciado, aguardando mensagens...\n\n")
+
+    while True:
+        mensagem = input("")
+        cliente(IP_DESTINO,PORTA_DESTINO,"Yussi",mensagem)
+        
+    '''IP_SERVIDOR = 'localhost'
     PORTA_SERVIDOR = 65432
-    p2 = Peer(2,"Yussi",False,'localhost',65433)
-    if p2.id == 1:
-        p2.coordenador = True
-        p2.IP = IP_SERVIDOR
-        p2.PORTA = PORTA_SERVIDOR
-    if p2.coordenador:
-        p2.inicia_servidor()
+    p1 = Peer(1,"Rod",False,'localhost',65432)
+    if p1.id == 1:
+        p1.coordenador = True
+        p1.IP = IP_SERVIDOR
+        p1.PORTA = PORTA_SERVIDOR
+    if p1.coordenador:
+        p1.inicia_servidor()
     else:
-        p2.conecta_servidor(IP_SERVIDOR,PORTA_SERVIDOR)
+        p1.conecta_servidor(IP_SERVIDOR,PORTA_SERVIDOR)'''
     
     
 if __name__=="__main__":
