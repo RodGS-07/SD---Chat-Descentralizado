@@ -1,109 +1,190 @@
 import socket
+import json
 from threading import Thread
 
-# Lista global de peers conectados
-PEERS = []
+class Peer:
+    def __init__(self, nome, ip, porta):
+        self.nome = nome
+        self.ip = ip
+        self.porta = porta
+        self.coordenador = False
+        self.peers = []  # lista de (ip, porta)
+        self.server_socket = None
 
-def inicia_servidor(IP, PORTA, nome_usuario):
-    """Servidor que recebe mensagens"""
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((IP, PORTA))
-    server_socket.listen(5)
+    # ------------------------------
+    # Servidor do peer
+    # ------------------------------
+    def inicia_servidor(self):
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((self.ip, self.porta))
+        self.server_socket.listen(5)
 
-    print(f"[SERVIDOR] {nome_usuario} ouvindo em {IP}:{PORTA}")
+        print(f"[SERVIDOR] {self.nome} ouvindo em {self.ip}:{self.porta}")
 
-    while True:
-        client_socket, client_address = server_socket.accept()
-        data = client_socket.recv(1024)
-        decoded_data = data.decode('utf-8')
-        print(f"\n> {decoded_data}")
-        client_socket.close()
+        while True:
+            client_socket, _ = self.server_socket.accept()
+            try:
+                data = client_socket.recv(2048)
+                msg = data.decode('utf-8')
+                self.tratar_mensagem(msg, client_socket)
+            except Exception as e:
+                print(f"[ERRO SERVIDOR] {e}")
+            finally:
+                client_socket.close()
+
+    # ------------------------------
+    # Tratamento de mensagens recebidas
+    # ------------------------------
+    def tratar_mensagem(self, msg, conn):
+        if msg.startswith("JOIN "):
+            # Novo peer pedindo para entrar
+            _, ip, porta = msg.split()
+            porta = int(porta)
+            novo_peer = (ip, porta)
+
+            if novo_peer not in self.peers:
+                self.peers.append(novo_peer)
+                print(f"[SISTEMA] Novo peer adicionado: {ip}:{porta}")
+
+            # Envia lista completa para o novo peer
+            lista_serializada = json.dumps(self.peers)
+            conn.send(lista_serializada.encode('utf-8'))
+
+            # Notifica os outros peers sobre o novo
+            self.notificar_peers(novo_peer)
+
+        elif msg.startswith("UPDATE "):
+            # Recebe atualização de lista do coordenador
+            try:
+                _, json_lista = msg.split(" ", 1)
+                self.peers = json.loads(json_lista)
+                print(f"[SISTEMA] Lista de peers atualizada ({len(self.peers)}):")
+                for ip, porta in self.peers:
+                    print(f" - {ip}:{porta}")
+            except Exception as e:
+                print(f"[ERRO UPDATE] {e}")
+
+        else:
+            # Mensagem normal
+            print(f"\n> {msg}")
+
+    # ------------------------------
+    # Cliente envia mensagens
+    # ------------------------------
+    def cliente(self, ip, porta, mensagem):
+        try:
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.connect((ip, porta))
+            client_socket.send(mensagem.encode('utf-8'))
+
+            # Se for um JOIN, espera resposta com lista de peers
+            if mensagem.startswith("JOIN "):
+                resposta = client_socket.recv(2048).decode('utf-8')
+                self.peers = json.loads(resposta)
+                print(f"[SISTEMA] Lista de peers recebida ({len(self.peers)}):")
+                for ip, porta in self.peers:
+                    print(f" - {ip}:{porta}")
+
+        except Exception as e:
+            print(f"[ERRO] Falha ao enviar para {ip}:{porta} -> {e}")
+        finally:
+            client_socket.close()
+
+    # ------------------------------
+    # Notifica todos os peers da rede
+    # ------------------------------
+    def notificar_peers(self, novo_peer):
+        """Coordenador envia a lista atualizada para todos os peers"""
+        lista_serializada = json.dumps(self.peers)
+        msg = f"UPDATE {lista_serializada}"
+        for ip, porta in self.peers:
+            if (ip, porta) != (self.ip, self.porta):  # não notifica a si mesmo
+                Thread(target=self.cliente, args=(ip, porta, msg), daemon=True).start()
+
+    # ------------------------------
+    # Broadcast (envia para todos)
+    # ------------------------------
+    def broadcast(self, mensagem):
+        for ip, porta in self.peers:
+            Thread(target=self.cliente, args=(ip, porta, f"{self.nome}: {mensagem}"), daemon=True).start()
+
+    # ------------------------------
+    # Registro inicial e eleição de coordenador
+    # ------------------------------
+    def iniciar_rede(self):
+        if not self.peers:
+            # Nenhum peer conhecido → este será o coordenador
+            self.coordenador = True
+            print(f"[SISTEMA] {self.nome} é o coordenador da rede.")
+            self.peers.append((self.ip, self.porta))
+        else:
+            # Registrar-se no coordenador
+            coord_ip, coord_port = self.peers[0]
+            msg = f"JOIN {self.ip} {self.porta}"
+            self.cliente(coord_ip, coord_port, msg)
+            print(f"[SISTEMA] Pedido de entrada enviado ao coordenador {coord_ip}:{coord_port}")
+
+    # ------------------------------
+    # Interface de usuário
+    # ------------------------------
+    def iniciar(self):
+        Thread(target=self.inicia_servidor, daemon=True).start()
+
+        # Pergunta se o usuário quer adicionar peers conhecidos
+        opcao = input("Deseja informar um peer coordenador existente? (s/n): ").strip().lower()
+        if opcao == "s":
+            ip = input("IP do coordenador: ")
+            porta = int(input("Porta do coordenador: "))
+            self.peers.append((ip, porta))
+
+        self.iniciar_rede()
+
+        print("\n[SISTEMA] Chat iniciado! Comandos disponíveis:")
+        print(" - ADD <ip> <porta> : adiciona novo peer manualmente")
+        print(" - LIST             : lista peers conhecidos")
+        print(" - EXIT             : encerra o chat")
+        print("\nDigite suas mensagens abaixo:\n")
+
+        while True:
+            entrada = input("")
+
+            if entrada.startswith("ADD "):
+                try:
+                    _, ip, porta = entrada.split()
+                    porta = int(porta)
+                    self.peers.append((ip, porta))
+                    print(f"[SISTEMA] Peer adicionado manualmente: {ip}:{porta}")
+                except:
+                    print("[ERRO] Uso correto: ADD <ip> <porta>")
+
+            elif entrada == "LIST":
+                print("[SISTEMA] Peers conhecidos:")
+                for ip, porta in self.peers:
+                    print(f" - {ip}:{porta}")
+
+            elif entrada == "EXIT":
+                print("[SISTEMA] Encerrando chat...")
+                break
+
+            else:
+                self.broadcast(entrada)
 
 
-def cliente(IP, PORTA, nome_usuario, mensagem):
-    """Cliente envia mensagem para um peer"""
-    try:
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((IP, PORTA))
-        msg = f"{nome_usuario}: {mensagem}"
-        client_socket.send(msg.encode('utf-8'))
-    except:
-        print(f"[ERRO] Não foi possível enviar mensagem para {IP}:{PORTA}")
-    finally:
-        client_socket.close()
-
-
-def broadcast(mensagem, nome_usuario):
-    """Envia a mensagem para todos os peers conhecidos"""
-    for ip, porta in PEERS:
-        Thread(target=cliente, args=(ip, porta, nome_usuario, mensagem), daemon=True).start()
-
-
+# ------------------------------
+# Função principal
+# ------------------------------
 def main():
-    global PEERS
-
-    IP_LOCAL = 'localhost'
-    #PORTA_LOCAL = int(input("Digite sua porta local: "))
-    #nome = input("Digite seu nome: ")
     while True:
         try:
-            enter = input("Digite seu nome e sua porta local (<nome> <porta>): ")
-            nome, PORTA_LOCAL = enter.split()
-            PORTA_LOCAL = int(PORTA_LOCAL)
+            entrada = input("Digite seu nome e porta local (<nome> <porta>): ")
+            nome, porta = entrada.split()
+            porta = int(porta)
             break
         except:
             print("[ERRO] Uso correto: <nome> <porta>")
 
-    # Inicia o servidor em paralelo
-    Thread(target=inicia_servidor, args=(IP_LOCAL, PORTA_LOCAL, nome), daemon=True).start()
-
-    print("\n[SISTEMA] Chat iniciado! Comandos disponíveis:")
-    print(" - ADD <ip> <porta> : adiciona novo peer")
-    print(" - REMOVE <ip> <porta> : remove peers da lista")
-    print(" - LIST             : lista peers conectados")
-    print(" - EXIT             : encerra o chat")
-    print("\nDigite suas mensagens abaixo:\n")
-
-    while True:
-        entrada = input("")
-
-        # Adiciona novos peers
-        if entrada.startswith("ADD "):
-            try:
-                _, ip, porta = entrada.split()
-                porta = int(porta)
-                PEERS.append((ip, porta))
-                print(f"[SISTEMA] Peer adicionado: {ip}:{porta}")
-            except:
-                print("[ERRO] Uso correto: ADD <ip> <porta>")
-
-        # Remove um peer da lista
-        elif entrada.startswith("REMOVE "):
-            try:
-                _, ip, porta = entrada.split()
-                porta = int(porta)
-                PEERS.remove((ip, porta))
-                print(f"[SISTEMA] Peer adicionado: {ip}:{porta}")
-            except:
-                print("[ERRO] Uso correto: REMOVE <ip> <porta>")
-
-        # Mostra lista de peers
-        elif entrada == "LIST":
-            if not PEERS:
-                print("[SISTEMA] Nenhum peer conectado ainda.")
-            else:
-                print("[SISTEMA] Peers conhecidos:")
-                for ip, porta in PEERS:
-                    print(f" - {ip}:{porta}")
-
-        # Encerra o chat
-        elif entrada == "EXIT":
-            print("[SISTEMA] Encerrando chat...")
-            break
-
-        # Envia mensagem para todos os peers
-        else:
-            broadcast(entrada, nome)
+    p = Peer(nome, "localhost", porta)
+    p.iniciar()
 
 
 if __name__ == "__main__":
