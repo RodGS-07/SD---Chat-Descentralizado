@@ -1,4 +1,5 @@
 import socket
+import time
 import json
 from threading import Thread
 
@@ -10,6 +11,7 @@ class Peer:
         self.coordenador = False
         self.peers = []  # lista de (ip, porta)
         self.server_socket = None
+        self.ultima_atividade = {}
 
     # ------------------------------
     # Servidor do peer
@@ -63,6 +65,10 @@ class Peer:
                     print(f" - {ip}:{porta}")
             except Exception as e:
                 print(f"[ERRO UPDATE] {e}")
+        elif msg.startswith("HEARTBEAT "):
+            _, ip, porta = msg.split()
+            porta = int(porta)
+            self.ultima_atividade[(ip, porta)] = time.time()
 
         else:
             # Mensagem normal
@@ -109,6 +115,33 @@ class Peer:
             Thread(target=self.cliente, args=(ip, porta, f"{self.nome}: {mensagem}"), daemon=True).start()
 
     # ------------------------------
+    # Heartbeat (indica que o peer ainda está ativo)
+    # ------------------------------
+    def enviar_heartbeat(self, coordenador_ip, coordenador_porta, meu_ip, minha_porta):
+        while True:
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((coordenador_ip, coordenador_porta))
+                msg = f"HEARTBEAT {meu_ip} {minha_porta}"
+                s.send(msg.encode('utf-8'))
+                s.close()
+            except:
+                print("[ERRO] Falha ao enviar heartbeat.")
+            time.sleep(5)  # envia a cada 5 segundos
+
+    # ------------------------------
+    # Monitora todos os peers da rede
+    # ------------------------------
+    def monitorar_peers(self):
+        while True:
+            agora = time.time()
+            for peer, ultimo in list(self.ultima_atividade.items()):
+                if agora - ultimo > 15:  # 15 segundos sem heartbeat
+                    print(f"[SISTEMA] Peer inativo removido: {peer}")
+                    self.peers.remove(peer)
+            time.sleep(5)
+
+    # ------------------------------
     # Registro inicial e eleição de coordenador
     # ------------------------------
     def iniciar_rede(self):
@@ -117,12 +150,24 @@ class Peer:
             self.coordenador = True
             print(f"[SISTEMA] {self.nome} é o coordenador da rede.")
             self.peers.append((self.ip, self.porta))
+
+             # Inicializa o dicionário de última atividade
+            self.ultima_atividade = {}
+            # Inicia thread de monitoramento
+            Thread(target=self.monitorar_peers, daemon=True).start()
         else:
             # Registrar-se no coordenador
             coord_ip, coord_port = self.peers[0]
             msg = f"JOIN {self.ip} {self.porta}"
             self.cliente(coord_ip, coord_port, msg)
             print(f"[SISTEMA] Pedido de entrada enviado ao coordenador {coord_ip}:{coord_port}")
+
+            # Inicia thread para enviar heartbeats ao coordenador
+            Thread(
+                target=self.enviar_heartbeat,
+                args=(coord_ip, coord_port, self.ip, self.porta),
+                daemon=True
+            ).start()
 
     # ------------------------------
     # Interface de usuário
