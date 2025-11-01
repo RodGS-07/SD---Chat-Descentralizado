@@ -8,10 +8,13 @@ class Peer:
         self.nome = nome
         self.ip = ip
         self.porta = porta
+        self.id = None
         self.coordenador = False
         self.peers = []  # lista de (ip, porta)
-        self.server_socket = None
+        self.mapa_ids = {}  # mapeia (ip, porta) -> id
+        self.proximo_id = 1
         self.ultima_atividade = {}
+        self.server_socket = None
 
     # ------------------------------
     # Servidor do peer
@@ -48,15 +51,24 @@ class Peer:
                 self.peers.append(novo_peer)
                 print(f"[SISTEMA] Novo peer adicionado: {ip}:{porta}")
 
-            # Envia lista completa para o novo peer
-            lista_serializada = json.dumps(self.peers)
-            conn.send(lista_serializada.encode('utf-8'))
+                # Gera um ID único para o novo peer
+                novo_id = self.proximo_id
+                self.mapa_ids[novo_peer] = novo_id
+                self.proximo_id += 1
+                print(f"[SISTEMA] Atribuído ID {novo_id} para o peer {ip}:{porta}")
+
+            # Prepara resposta com ID e lista de peers
+            resposta = {
+                "id": self.mapa_ids[novo_peer],
+                "peers": self.peers
+            }
+            conn.send(json.dumps(resposta).encode('utf-8'))
 
             # Notifica os outros peers sobre o novo
             self.notificar_peers(novo_peer)
 
         elif msg.startswith("UPDATE "):
-            # Recebe atualização de lista do coordenador
+            # Recebe atualização da lista
             try:
                 _, json_lista = msg.split(" ", 1)
                 self.peers = json.loads(json_lista)
@@ -65,10 +77,27 @@ class Peer:
                     print(f" - {ip}:{porta}")
             except Exception as e:
                 print(f"[ERRO UPDATE] {e}")
+
         elif msg.startswith("HEARTBEAT "):
+            # Atualiza último heartbeat
             _, ip, porta = msg.split()
             porta = int(porta)
             self.ultima_atividade[(ip, porta)] = time.time()
+
+        elif msg.startswith("EXIT "):
+            # Um peer está saindo da rede
+            _, ip, porta = msg.split()
+            porta = int(porta)
+            peer_removido = (ip, porta)
+
+            if peer_removido in self.peers:
+                self.peers.remove(peer_removido)
+                print(f"[SISTEMA] Peer saiu da rede: {ip}:{porta}")
+
+                # Se for o coordenador, notifica os demais peers
+                if self.coordenador:
+                    print("[COORDENADOR] Atualizando lista de peers após saída...")
+                    self.notificar_peers(peer_removido)
 
         else:
             # Mensagem normal
@@ -83,10 +112,14 @@ class Peer:
             client_socket.connect((ip, porta))
             client_socket.send(mensagem.encode('utf-8'))
 
-            # Se for um JOIN, espera resposta com lista de peers
+            # Se for um JOIN, espera resposta com lista e ID
             if mensagem.startswith("JOIN "):
                 resposta = client_socket.recv(2048).decode('utf-8')
-                self.peers = json.loads(resposta)
+                dados = json.loads(resposta)
+                self.id = dados["id"]
+                self.peers = dados["peers"]
+
+                print(f"[SISTEMA] ID atribuído pelo coordenador: {self.id}")
                 print(f"[SISTEMA] Lista de peers recebida ({len(self.peers)}):")
                 for ip, porta in self.peers:
                     print(f" - {ip}:{porta}")
@@ -100,82 +133,153 @@ class Peer:
     # Notifica todos os peers da rede
     # ------------------------------
     def notificar_peers(self, novo_peer):
-        """Coordenador envia a lista atualizada para todos os peers"""
         lista_serializada = json.dumps(self.peers)
         msg = f"UPDATE {lista_serializada}"
         for ip, porta in self.peers:
-            if (ip, porta) != (self.ip, self.porta):  # não notifica a si mesmo
+            if (ip, porta) != (self.ip, self.porta):
                 Thread(target=self.cliente, args=(ip, porta, msg), daemon=True).start()
 
     # ------------------------------
-    # Broadcast (envia para todos)
+    # Broadcast (envia mensagens normais)
     # ------------------------------
     def broadcast(self, mensagem):
         for ip, porta in self.peers:
-            Thread(target=self.cliente, args=(ip, porta, f"{self.nome}: {mensagem}"), daemon=True).start()
+            Thread(
+                target=self.cliente,
+                args=(ip, porta, f"{self.nome} [{self.id}]: {mensagem}"),
+                daemon=True
+            ).start()
 
     # ------------------------------
-    # Heartbeat (indica que o peer ainda está ativo)
+    # Heartbeat (peer → coordenador)
     # ------------------------------
-    def enviar_heartbeat(self, coordenador_ip, coordenador_porta, meu_ip, minha_porta):
+    # def enviar_heartbeat(self, coord_ip, coord_porta):
+    #     while True:
+    #         try:
+    #             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    #             s.connect((coord_ip, coord_porta))
+    #             msg = f"HEARTBEAT {self.ip} {self.porta}"
+    #             s.send(msg.encode('utf-8'))
+    #             s.close()
+    #         except:
+    #             print("[ERRO] Falha ao enviar heartbeat (coordenador inacessível).")
+    #         time.sleep(5)
+
+    # ------------------------------
+    # Heartbeat do coordenador → peers
+    # ------------------------------
+    def enviar_heartbeat_coordenador(self):
+        """O coordenador envia heartbeats periódicos para todos os peers."""
         while True:
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.connect((coordenador_ip, coordenador_porta))
-                msg = f"HEARTBEAT {meu_ip} {minha_porta}"
-                s.send(msg.encode('utf-8'))
-                s.close()
-            except:
-                print("[ERRO] Falha ao enviar heartbeat.")
+            for ip, porta in list(self.peers):
+                if (ip, porta) != (self.ip, self.porta):  # não envia para si mesmo
+                    try:
+                        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        s.connect((ip, porta))
+                        msg = f"HEARTBEAT {self.ip} {self.porta}"
+                        s.send(msg.encode('utf-8'))
+                        s.close()
+                    except:
+                        print(f"[ERRO] Coordenador não conseguiu enviar heartbeat a {ip}:{porta}")
             time.sleep(5)  # envia a cada 5 segundos
 
     # ------------------------------
-    # Monitora todos os peers da rede
+    # Monitorar peers (coordenador)
     # ------------------------------
-    def monitorar_peers(self):
+    # def monitorar_peers(self):
+    #     while True:
+    #         agora = time.time()
+    #         for peer, ultimo in list(self.ultima_atividade.items()):
+    #             if agora - ultimo > 15:
+    #                 print(f"[SISTEMA] Peer inativo removido: {peer}")
+    #                 if peer in self.peers:
+    #                     self.peers.remove(peer)
+    #         time.sleep(5)
+
+    # ------------------------------
+    # Monitora se o coordenador está ativo (para peers não coordenadores)
+    # ------------------------------
+    def monitorar_coordenador(self, coord_ip, coord_port):
+        """Verifica se o coordenador ainda está enviando heartbeats."""
+        print(f"[SISTEMA] Iniciando monitoramento do coordenador {coord_ip}:{coord_port}...")
+
+        # Aguarda o primeiro heartbeat antes de iniciar o monitoramento
+        while (coord_ip, coord_port) not in self.ultima_atividade:
+            time.sleep(1)
+
+        print(f"[SISTEMA] Primeiro heartbeat recebido do coordenador {coord_ip}:{coord_port}.")
+        
+        # Depois disso, começa o monitoramento regular
         while True:
             agora = time.time()
-            for peer, ultimo in list(self.ultima_atividade.items()):
-                if agora - ultimo > 15:  # 15 segundos sem heartbeat
-                    print(f"[SISTEMA] Peer inativo removido: {peer}")
-                    self.peers.remove(peer)
+            ultimo_heartbeat = self.ultima_atividade.get((coord_ip, coord_port), 0)
+
+            # Se passou mais de 15s desde o último heartbeat
+            if agora - ultimo_heartbeat > 15:
+                print(f"[ALERTA] Coordenador {coord_ip}:{coord_port} está inativo!")
+                print("[SISTEMA] Este peer detectou a falha do coordenador.")
+                break  # (poderia iniciar eleição aqui)
+            
             time.sleep(5)
 
     # ------------------------------
-    # Registro inicial e eleição de coordenador
+    # Registro inicial e eleição
     # ------------------------------
     def iniciar_rede(self):
         if not self.peers:
-            # Nenhum peer conhecido → este será o coordenador
+            # Este peer é o coordenador
             self.coordenador = True
-            print(f"[SISTEMA] {self.nome} é o coordenador da rede.")
+            self.id = 0
+            self.mapa_ids[(self.ip, self.porta)] = self.id
             self.peers.append((self.ip, self.porta))
+            print(f"[SISTEMA] {self.nome} é o coordenador da rede (ID 0).")
 
-             # Inicializa o dicionário de última atividade
-            self.ultima_atividade = {}
-            # Inicia thread de monitoramento
-            Thread(target=self.monitorar_peers, daemon=True).start()
+            # Inicia monitoramento
+            Thread(target=self.enviar_heartbeat_coordenador, daemon=True).start()
+
         else:
-            # Registrar-se no coordenador
+            # Conecta ao coordenador
             coord_ip, coord_port = self.peers[0]
             msg = f"JOIN {self.ip} {self.porta}"
             self.cliente(coord_ip, coord_port, msg)
             print(f"[SISTEMA] Pedido de entrada enviado ao coordenador {coord_ip}:{coord_port}")
 
-            # Inicia thread para enviar heartbeats ao coordenador
+            # Inicia monitoramento do coordenador
             Thread(
-                target=self.enviar_heartbeat,
-                args=(coord_ip, coord_port, self.ip, self.porta),
+                target=self.monitorar_coordenador,
+                args=(coord_ip, coord_port),
                 daemon=True
             ).start()
 
     # ------------------------------
-    # Interface de usuário
+    # Saída de um peer do chat
+    # ------------------------------
+    def sair_chat(self):
+        msg = f"EXIT {self.ip} {self.porta}"
+
+        # Envia para todos os peers conhecidos
+        for ip, porta in self.peers:
+            if (ip, porta) != (self.ip, self.porta):
+                Thread(target=self.cliente, args=(ip, porta, msg), daemon=True).start()
+
+        # Caso o peer não seja o coordenador, também avisa o coordenador diretamente
+        if not self.coordenador and self.peers:
+            coord_ip, coord_port = self.peers[0]
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.connect((coord_ip, coord_port))
+                s.send(msg.encode('utf-8'))
+                s.close()
+                print(f"[SISTEMA] Coordenador {coord_ip}:{coord_port} notificado da saída.")
+            except:
+                print("[ERRO] Não foi possível notificar o coordenador da saída.")
+
+    # ------------------------------
+    # Interface do usuário
     # ------------------------------
     def iniciar(self):
         Thread(target=self.inicia_servidor, daemon=True).start()
 
-        # Pergunta se o usuário quer adicionar peers conhecidos
         opcao = input("Deseja informar um peer coordenador existente? (s/n): ").strip().lower()
         if opcao == "s":
             ip = input("IP do coordenador: ")
@@ -185,7 +289,7 @@ class Peer:
         self.iniciar_rede()
 
         print("\n[SISTEMA] Chat iniciado! Comandos disponíveis:")
-        print(" - ADD <ip> <porta> : adiciona novo peer manualmente")
+        print(" - ADD <ip> <porta> : adiciona manualmente um peer")
         print(" - LIST             : lista peers conhecidos")
         print(" - EXIT             : encerra o chat")
         print("\nDigite suas mensagens abaixo:\n")
@@ -198,7 +302,7 @@ class Peer:
                     _, ip, porta = entrada.split()
                     porta = int(porta)
                     self.peers.append((ip, porta))
-                    print(f"[SISTEMA] Peer adicionado manualmente: {ip}:{porta}")
+                    print(f"[SISTEMA] Peer adicionado: {ip}:{porta}")
                 except:
                     print("[ERRO] Uso correto: ADD <ip> <porta>")
 
@@ -208,7 +312,8 @@ class Peer:
                     print(f" - {ip}:{porta}")
 
             elif entrada == "EXIT":
-                print("[SISTEMA] Encerrando chat...")
+                print("[SISTEMA] Saindo do chat...")
+                self.sair_chat()
                 break
 
             else:
@@ -216,7 +321,7 @@ class Peer:
 
 
 # ------------------------------
-# Função principal
+# Execução principal
 # ------------------------------
 def main():
     while True:
