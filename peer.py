@@ -2,6 +2,9 @@ import socket
 import time
 import json
 from threading import Thread
+import atexit
+import signal
+import sys
 
 class Peer:
     def __init__(self, nome, ip, porta):
@@ -256,10 +259,10 @@ class Peer:
         while True:
             if self.coordenador_atual:
                 ultimo = self.ultima_atividade.get(self.coordenador_atual)
-                if ultimo and time.time() - ultimo > 10:
+                if ultimo and time.time() - ultimo > 15:
                     print("[ALERTA] Coordenador inativo detectado!")
 
-                    # 🔹 Envia o mapa atual antes de iniciar eleição
+                    # Envia o mapa atual antes de iniciar eleição
                     if self.mapa_ids:
                         self.enviar_mapa_ids_para_peers()
 
@@ -268,6 +271,36 @@ class Peer:
 
                     time.sleep(2)
                     self.iniciar_eleicao()
+            time.sleep(5)
+
+    def monitorar_peers(self):
+        """Coordenador verifica se algum peer ficou inativo."""
+        while self.coordenador:
+            tempo_atual = time.time()
+            inativos = []
+
+            # Descobrir quem está inativo (sem mexer nas estruturas)
+            for peer, ultimo in list(self.ultima_atividade.items()):
+                if peer != (self.ip, self.porta) and tempo_atual - ultimo > 15:
+                    inativos.append(peer)
+
+            # Remover de fato e notificar apenas uma vez
+            if inativos:
+                for peer in inativos:
+                    ip, porta = peer
+                    print(f"[ALERTA] Peer inativo detectado: {ip}:{porta}")
+
+                    if peer in self.peers:
+                        self.peers.remove(peer)
+                    if peer in self.mapa_ids:
+                        del self.mapa_ids[peer]
+                    if peer in self.ultima_atividade:
+                        del self.ultima_atividade[peer]
+
+                # Atualiza todos os outros peers apenas uma vez
+                self.notificar_peers(None)
+                self.enviar_mapa_ids_para_peers()
+
             time.sleep(5)
 
     # ============================================================
@@ -282,6 +315,7 @@ class Peer:
             self.peers.append((self.ip, self.porta))
             print(f"[SISTEMA] {self.nome} é o coordenador da rede (ID 0).")
             Thread(target=self.enviar_heartbeat_coordenador, daemon=True).start()
+            Thread(target=self.monitorar_peers, daemon=True).start()
 
         else:
             coord_ip, coord_port = self.peers[0]
@@ -311,18 +345,22 @@ class Peer:
 
         opcao = input("Deseja informar um coordenador existente? (s/n): ").strip().lower()
         if opcao == "s":
-            ip = input("IP do coordenador: ")
-            porta = int(input("Porta do coordenador: "))
+            coord = input("IP e porta do coordenador: ")
+            ip, porta = coord.split()
+            porta = int(porta)
             self.peers.append((ip, porta))
 
         self.iniciar_rede()
 
-        print("\n[SISTEMA] Chat iniciado!")
+        print("\n[SISTEMA] Chat iniciado!\nDigite 'LIST' para ver outros peers conhecidos ou 'EXIT' para sair do chat\n")
         while True:
             entrada = input("")
             if entrada == "EXIT":
                 print("[SISTEMA] Saindo...")
                 break
+            elif entrada == "LIST":
+                for peer in self.peers:
+                    print(peer)
             else:
                 self.broadcast(entrada)
 
@@ -337,6 +375,22 @@ class Peer:
                 daemon=True
             ).start()
 
+    # ============================================================
+    # ENCERRAMENTO
+    # ============================================================
+    def encerrar(self):
+        """Envia EXIT a todos os peers antes de encerrar."""
+        print(f"\n[SISTEMA] {self.nome} encerrando...")
+
+        msg = f"EXIT {self.ip} {self.porta}"
+        for ip, porta in list(self.peers):
+            if (ip, porta) != (self.ip, self.porta):
+                try:
+                    self.cliente(ip, porta, msg)
+                except Exception:
+                    pass
+
+        print("[SISTEMA] Mensagem de saída enviada. Encerrando conexão.")
 
 # ============================================================
 # MAIN
@@ -345,6 +399,16 @@ def main():
     entrada = input("Digite seu nome e porta local (<nome> <porta>): ")
     nome, porta = entrada.split()
     p = Peer(nome, "localhost", int(porta))
+
+    # Garante execução de encerramento no Ctrl+C, ou quando o Python fecha
+    def sair_graciosamente(*args):
+        p.encerrar()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, sair_graciosamente)  # Ctrl+C
+    signal.signal(signal.SIGTERM, sair_graciosamente) # kill PID
+    atexit.register(p.encerrar)
+    
     p.iniciar()
 
 if __name__ == "__main__":
