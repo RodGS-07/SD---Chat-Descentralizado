@@ -125,7 +125,7 @@ class Peer:
 
             if peer_removido in self.peers:
                 self.peers.remove(peer_removido)
-                print(f"[SISTEMA] Peer saiu: {nome} ({ip}:{porta})")
+                print(f"\033[1;31m [SISTEMA] Peer saiu: {nome} ({ip}:{porta}) \033[0m")
                 if self.coordenador:
                     self.notificar_peers(peer_removido)
 
@@ -277,11 +277,11 @@ class Peer:
         while True:
             if self.coordenador_atual:
                 ultimo = self.ultima_atividade.get(self.coordenador_atual)
-                if ultimo and time.time() - ultimo > 15:
-                    print("[ALERTA] Coordenador inativo detectado!")
+                if ultimo and time.time() - ultimo > 10:
+                    print("\033[1;31m [ALERTA] Coordenador inativo detectado! \033[0m")
                     if self.coordenador_atual in self.peers:
                         self.peers.remove(self.coordenador_atual)
-                    time.sleep(2)
+                    #time.sleep(2)
                     self.iniciar_eleicao()
             time.sleep(5)
 
@@ -346,9 +346,14 @@ class Peer:
     # ============================================================
     def broadcast(self, mensagem):
         for ip, porta in self.peers:
-            Thread(target=self.cliente,
-                   args=(ip, porta, f"{self.nome} [{self.id}]: {mensagem}"),
-                   daemon=True).start()
+            if (ip, porta) != (self.ip,self.porta):
+                Thread(target=self.cliente,
+                    args=(ip, porta, f"{self.nome} [{self.id}]: {mensagem}"),
+                    daemon=True).start()
+            else:
+                Thread(target=self.cliente,
+                    args=(ip, porta, f"\033[0;32m Você [{self.id}]: {mensagem} \033[0m"),
+                    daemon=True).start()
 
     # ============================================================
     # ENCERRAMENTO
