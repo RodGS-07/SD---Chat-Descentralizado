@@ -125,7 +125,7 @@ class Peer:
 
             if peer_removido in self.peers:
                 self.peers.remove(peer_removido)
-                print(f"\033[1;31m [SISTEMA] Peer saiu: {nome} ({ip}:{porta}) \033[0m")
+                print(f"[SISTEMA] Peer saiu: {nome} ({ip}:{porta})")
                 if self.coordenador:
                     self.notificar_peers(peer_removido)
 
@@ -278,7 +278,7 @@ class Peer:
             if self.coordenador_atual:
                 ultimo = self.ultima_atividade.get(self.coordenador_atual)
                 if ultimo and time.time() - ultimo > 10:
-                    print("\033[1;31m [ALERTA] Coordenador inativo detectado! \033[0m")
+                    print("[ALERTA] Coordenador inativo detectado!")
                     if self.coordenador_atual in self.peers:
                         self.peers.remove(self.coordenador_atual)
                     #time.sleep(2)
@@ -352,7 +352,7 @@ class Peer:
                     daemon=True).start()
             else:
                 Thread(target=self.cliente,
-                    args=(ip, porta, f"\033[0;32m Você [{self.id}]: {mensagem} \033[0m"),
+                    args=(ip, porta, f"Você [{self.id}]: {mensagem}"),
                     daemon=True).start()
 
     # ============================================================
