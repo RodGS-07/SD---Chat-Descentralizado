@@ -109,6 +109,15 @@ class Peer:
         elif msg.startswith("COORDINATOR "):
             self.tratar_novo_coordenador(msg)
 
+        elif msg.startswith("REMOVE_COORDINATOR "):
+            _, ip, porta = msg.split()
+            porta = int(porta)
+            coord = (ip, porta)
+            if coord in self.peers:
+                self.peers.remove(coord)
+                nome_coord = self.mapa_nomes.get(coord, "Coordenador desconhecido")
+                print(f"[SISTEMA] Coordenador {nome_coord} ({ip}:{porta}) removido da lista por inatividade.")
+
         elif msg.startswith("MAP_UPDATE "):
             _, json_dados = msg.split(" ", 1)
             try:
@@ -286,10 +295,23 @@ class Peer:
                 if ultimo and time.time() - ultimo > 10:
                     print("[ALERTA] Coordenador inativo detectado!")
                     if self.coordenador_atual in self.peers:
+                        provisorio = self.coordenador_atual
                         self.peers.remove(self.coordenador_atual)
-                    #time.sleep(2)
-                    self.iniciar_eleicao()
-            time.sleep(5)
+
+                    # Avisa a todos os outros peers para removerem o coordenador
+                    for peer_ip, peer_porta in list(self.peers):
+                        if (peer_ip, peer_porta) != (self.ip, self.porta):
+                            try:
+                                msg = f"REMOVE_COORDINATOR {provisorio[0]} {provisorio[1]}"
+                                Thread(target=self.cliente, args=(peer_ip, peer_porta, msg), daemon=True).start()
+                            except Exception:
+                                pass
+
+                    # Agora inicia a eleição localmente
+                    Thread(target=self.iniciar_eleicao, daemon=True).start()
+                    # Para evitar múltiplos disparos
+                    time.sleep(5)
+            time.sleep(2)
 
     # ============================================================
     # INICIALIZAÇÃO
@@ -376,21 +398,25 @@ class Peer:
 
         time.sleep(1)
         if self.coordenador:
-            print("\n[SISTEMA] Chat iniciado!\nDigite 'LIST' para ver peers (nome, IP e porta) ou 'EXIT' para sair.\n")
+            print("\n[SISTEMA] Chat iniciado!\nDigite 'LIST' para ver peers (nome, ID, IP e porta) ou 'EXIT' para sair.\n")
         else:
-            print("\n[SISTEMA] Boas vindas ao chat!\nDigite 'LIST' para ver peers (nome, IP e porta) ou 'EXIT' para sair.\n")
+            print("\n[SISTEMA] Boas vindas ao chat!\nDigite 'LIST' para ver peers (nome, ID, IP e porta) ou 'EXIT' para sair.\n")
 
         while True:
-            entrada = input("")
-            if entrada == "EXIT":
-                EXITING = True
-                break
-            elif entrada == "LIST":
-                for peer in self.peers:
-                    nome = self.mapa_nomes.get(peer, "Desconhecido")
-                    print(f"{nome} -> {peer}")
-            elif entrada.strip():
-                self.enviar_mensagem(entrada)
+            try:
+                entrada = input("")
+                if entrada == "EXIT":
+                    EXITING = True
+                    break
+                elif entrada == "LIST":
+                    for peer in self.peers:
+                        nome = self.mapa_nomes.get(peer, "Desconhecido")
+                        id = self.mapa_ids.get(peer, None)
+                        print(f"{nome} [{id}] -> {peer}")
+                elif entrada.strip():
+                    self.enviar_mensagem(entrada)
+            except KeyboardInterrupt:
+                self.encerrar()
 
     # ============================================================
     # ENVIO DE MENSAGENS
@@ -417,7 +443,7 @@ class Peer:
         if self.coordenador:
             if not via_exit:
                 print("[SISTEMA] Coordenador encerrando — saída será detectada por falha de heartbeat.")
-                return
+                sys.exit(0)
             else:
                 print("[SISTEMA] Coordenador saindo voluntariamente — escolhendo sucessor...")
 
@@ -464,6 +490,8 @@ class Peer:
                 except:
                     pass
         print("[SISTEMA] Mensagem de saída enviada.")
+        if not via_exit:
+            sys.exit(0)
 
 # ============================================================
 # DISPONIBLIDADE DE PORTA
@@ -536,6 +564,7 @@ def main():
         signal.signal(signal.SIGINT, sair_falha)
     else:
         atexit.register(sair_exit)
+    
 
     # try:
     #     signal.signal(signal.SIGTERM, sair_graciosamente) # kill PID
