@@ -322,14 +322,52 @@ class Peer:
         time.sleep(1)
 
         opcao = input("Deseja informar um coordenador existente? (s/n): ").strip().lower()
+        while opcao.lower() != "s" and opcao.lower() != "n":
+            print("[ERRO] Somente 's' e 'n' são opções válidas. Digite apenas 's' ou 'n'. ")
+            opcao = input("Deseja informar um coordenador existente? (s/n): ").strip().lower()
+
         if opcao == "s":
-            porta = int(input("Porta do coordenador: "))
-            self.peers.append(('localhost', porta))
+            while True:
+                try:
+                    porta_str = input("Porta do coordenador: ").strip()
+
+                    # Verifica se a entrada é válida
+                    if '.' in porta_str or not porta_str.isdigit():
+                        print("[ERRO] A porta deve ser um número inteiro entre 0 e 65535.")
+                        continue
+
+                    porta = int(porta_str)
+                    if not (0 <= porta <= 65535):
+                        print("[ERRO] A porta deve estar entre 0 e 65535.")
+                        continue
+
+                    # Verifica se há alguém ouvindo nessa porta
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(1)
+                    resultado = s.connect_ex(('localhost', porta))
+                    s.close()
+
+                    if resultado == 0:
+                        # Conexão bem-sucedida → coordenador existente
+                        print(f"[SISTEMA] Coordenador encontrado em localhost:{porta}.")
+                        self.peers.append(('localhost', porta))
+                    else:
+                        # Ninguém ouvindo → cria rede própria
+                        print(f"[SISTEMA] Nenhum coordenador encontrado na porta {porta}. Criando rede própria para {self.nome}...")
+                    break
+
+                except ValueError:
+                    print("[ERRO] Entrada inválida. A porta deve ser um número inteiro.")
+                except Exception as e:
+                    print(f"[ERRO] {e}")
+        else:
+            print(f"[SISTEMA] Criando rede própria para {self.nome}...")
+            time.sleep(1)
 
         self.iniciar_rede()
 
         time.sleep(1)
-        print("\n[SISTEMA] Chat iniciado!\nDigite 'LIST' para ver peers ou 'EXIT' para sair\n")
+        print("\n[SISTEMA] Chat iniciado!\nDigite 'LIST' para ver peers (nome, IP e porta) ou 'EXIT' para sair.\n")
         while True:
             entrada = input("")
             if entrada == "EXIT":
@@ -339,12 +377,12 @@ class Peer:
                     nome = self.mapa_nomes.get(peer, "Desconhecido")
                     print(f"{nome} -> {peer}")
             else:
-                self.broadcast(entrada)
+                self.enviar_mensagem(entrada)
 
     # ============================================================
-    # BROADCAST
+    # ENVIO DE MENSAGENS
     # ============================================================
-    def broadcast(self, mensagem):
+    def enviar_mensagem(self, mensagem):
         for ip, porta in self.peers:
             if (ip, porta) != (self.ip,self.porta):
                 Thread(target=self.cliente,
@@ -376,11 +414,51 @@ class Peer:
         print("[SISTEMA] Mensagem de saída enviada.")
 
 # ============================================================
+# DISPONIBLIDADE DE PORTA
+# ============================================================
+def porta_disponivel(porta):
+    """Verifica se a porta é válida e está livre para uso."""
+    # Verifica tipo e faixa numérica
+    if not isinstance(porta, int):
+        print("[ERRO] A porta deve ser um número inteiro.")
+        return False
+    if not (0 <= porta <= 65535):
+        print("[ERRO] A porta deve estar entre 0 e 65535.")
+        return False
+
+    # Tenta fazer o bind (se der erro, já está em uso)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(("localhost", porta))
+            return True
+        except OSError:
+            print(f"[ERRO] A porta {porta} já está sendo usada por outro processo.")
+            return False
+
+# ============================================================
 # MAIN
 # ============================================================
 def main():
-    nome, porta_str = input("Digite seu nome e porta local (<nome> <porta>): ").split()
-    porta = int(porta_str)
+    while True:
+        try:
+            entrada = input("Digite seu nome e porta local (<nome> <porta>): ")
+            nome, porta_str = entrada.split()
+
+            # Detecta valores não inteiros (float, texto, etc.)
+            if '.' in porta_str or not porta_str.isdigit():
+                print("[ERRO] A porta deve ser um número inteiro entre 0 e 65535.")
+                continue
+
+            porta = int(porta_str)
+
+            # Verifica validade e disponibilidade
+            if porta_disponivel(porta):
+                break
+        except ValueError:
+            print("[ERRO] Entrada inválida. Use o formato: <nome> <porta>")
+        except Exception as e:
+            print(f"[ERRO] {e}")
+
     p = Peer(nome, "localhost", porta)
 
     def sair_graciosamente(*args):
@@ -393,9 +471,6 @@ def main():
         signal.signal(signal.SIGINT, sair_graciosamente)  # Ctrl+C
     finally:
         atexit.register(p.encerrar)
-    # signal.signal(signal.SIGINT, sair_graciosamente)  # Ctrl+C
-    # signal.signal(signal.SIGTERM, sair_graciosamente) # kill PID
-    # atexit.register(p.encerrar)
 
     p.iniciar()
 
