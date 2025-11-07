@@ -99,6 +99,9 @@ class Peer:
             _, ip, porta = msg.split()
             porta = int(porta)
             self.ultima_atividade[(ip, porta)] = time.time()
+        
+        elif msg.startswith("START_ELECTION"):
+            Thread(target=self.iniciar_eleicao, daemon=True).start()
 
         elif msg.startswith("ELECTION "):
             self.tratar_eleicao(msg)
