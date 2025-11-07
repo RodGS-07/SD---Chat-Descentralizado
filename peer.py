@@ -6,6 +6,8 @@ import atexit
 import signal
 import sys
 
+EXITING = False
+
 class Peer:
     def __init__(self, nome, ip, porta):
         self.nome = nome
@@ -130,7 +132,8 @@ class Peer:
                     self.notificar_peers(peer_removido)
 
         else:
-            print(f"\n> {msg}")
+            if msg.strip():  # só mostra se não for vazio
+                print(f"\n> {msg}")
 
     # ============================================================
     # CLIENTE
@@ -318,6 +321,7 @@ class Peer:
     # INTERFACE
     # ============================================================
     def iniciar(self):
+        global EXITING
         Thread(target=self.inicia_servidor, daemon=True).start()
         time.sleep(1)
 
@@ -350,6 +354,7 @@ class Peer:
                     if resultado == 0:
                         # Conexão bem-sucedida → coordenador existente
                         print(f"[SISTEMA] Coordenador encontrado em localhost:{porta}.")
+                        time.sleep(1)
                         self.peers.append(('localhost', porta))
                     else:
                         # Ninguém ouvindo → cria rede própria
@@ -367,16 +372,21 @@ class Peer:
         self.iniciar_rede()
 
         time.sleep(1)
-        print("\n[SISTEMA] Chat iniciado!\nDigite 'LIST' para ver peers (nome, IP e porta) ou 'EXIT' para sair.\n")
+        if self.coordenador:
+            print("\n[SISTEMA] Chat iniciado!\nDigite 'LIST' para ver peers (nome, IP e porta) ou 'EXIT' para sair.\n")
+        else:
+            print("\n[SISTEMA] Boas vindas ao chat!\nDigite 'LIST' para ver peers (nome, IP e porta) ou 'EXIT' para sair.\n")
+
         while True:
             entrada = input("")
             if entrada == "EXIT":
+                EXITING = True
                 break
             elif entrada == "LIST":
                 for peer in self.peers:
                     nome = self.mapa_nomes.get(peer, "Desconhecido")
                     print(f"{nome} -> {peer}")
-            else:
+            elif entrada.strip():
                 self.enviar_mensagem(entrada)
 
     # ============================================================
@@ -396,14 +406,53 @@ class Peer:
     # ============================================================
     # ENCERRAMENTO
     # ============================================================
-    def encerrar(self):
+    def encerrar(self, via_exit=False):
         print(f"\n[SISTEMA] {self.nome} encerrando...")
         msg = f"EXIT {self.ip} {self.porta} {self.nome}"
 
         # Coordenador não anuncia sua própria saída
         if self.coordenador:
-            print("[SISTEMA] Coordenador encerrando — saída será detectada por falha de heartbeat.")
-            return
+            if not via_exit:
+                print("[SISTEMA] Coordenador encerrando — saída será detectada por falha de heartbeat.")
+                return
+            else:
+                print("[SISTEMA] Coordenador saindo voluntariamente — escolhendo sucessor...")
+
+                # 1) Remove-se das estruturas locais (não será mais candidato)
+                if (self.ip, self.porta) in self.peers:
+                    try:
+                        self.peers.remove((self.ip, self.porta))
+                    except ValueError:
+                        pass
+                self.mapa_ids.pop((self.ip, self.porta), None)
+                self.mapa_nomes.pop((self.ip, self.porta), None)
+
+                # 2) Notifica todos os peers com a lista atualizada e o mapa atualizado
+                # (assim todos sabem que o coordenador saiu e não o considerarão candidato)
+                self.notificar_peers(None)            # envia UPDATE com nova self.peers
+                self.enviar_mapas_para_peers()        # envia MAP_UPDATE com mapa sem o antigo coordenador
+
+                # 3) Peça explicitamente que os outros iniciem eleição
+                #    (você poderia confiar apenas em monitoramento/heartbeat, 
+                #     mas assim forçamos eleição imediata)
+                for ip, porta in list(self.peers):
+                    if (ip, porta) != (self.ip, self.porta):
+                        try:
+                            Thread(target=self.cliente, args=(ip, porta, "START_ELECTION"), daemon=True).start()
+                        except:
+                            pass
+
+                # 4) marca que não é mais coordenador e sai
+                self.coordenador = False
+                self.em_eleicao = False
+
+                # dá um pequeno tempo para pedidos serem enviados
+                time.sleep(0.5)
+
+                # não continua participando da eleição localmente (já saiu)
+                # e retorna para encerrar normalmente (não envia EXIT pois já fez UPDATE)
+                print("[SISTEMA] Transferência solicitada — finalizando processo do coordenador.")
+                return
 
         for ip, porta in list(self.peers):
             if (ip, porta) != (self.ip, self.porta):
@@ -439,6 +488,8 @@ def porta_disponivel(porta):
 # MAIN
 # ============================================================
 def main():
+    global EXITING
+    EXITING = False
     while True:
         try:
             entrada = input("Digite seu nome e porta local (<nome> <porta>): ")
@@ -461,18 +512,34 @@ def main():
 
     p = Peer(nome, "localhost", porta)
 
-    def sair_graciosamente(*args):
-        p.encerrar()
+    def sair_falha(*args):
+        p.encerrar(via_exit=False)
         sys.exit(0)
 
-    try:
-        signal.signal(signal.SIGTERM, sair_graciosamente) # kill PID
-    except KeyboardInterrupt:
-        signal.signal(signal.SIGINT, sair_graciosamente)  # Ctrl+C
-    finally:
-        atexit.register(p.encerrar)
+    def sair_exit():
+        p.encerrar(via_exit=True)
+        #sys.exit(0)
+
+    # try:
+    #     signal.signal(signal.SIGINT, sair_falha)
+    # except KeyboardInterrupt:
+    #     signal.signal(signal.SIGINT, sair_falha)
+    # finally:
+    #     atexit.register(sair_exit)
 
     p.iniciar()
+
+    if not EXITING:
+        signal.signal(signal.SIGINT, sair_falha)
+    else:
+        atexit.register(sair_exit)
+
+    # try:
+    #     signal.signal(signal.SIGTERM, sair_graciosamente) # kill PID
+    # except KeyboardInterrupt:
+    #     signal.signal(signal.SIGINT, sair_graciosamente)  # Ctrl+C
+    # finally:
+    #     atexit.register(p.encerrar,via_exit=True)
 
 if __name__ == "__main__":
     main()
