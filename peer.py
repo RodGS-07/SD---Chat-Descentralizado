@@ -44,7 +44,7 @@ class Peer:
                 print(f"[ERRO SERVIDOR] {e}")
             finally:
                 client_socket.close()
-
+    
     # ============================================================
     # TRATAMENTO DE MENSAGENS
     # ============================================================
@@ -56,7 +56,14 @@ class Peer:
 
             if novo_peer not in self.peers:
                 self.peers.append(novo_peer)
-                print(f"[SISTEMA] Novo peer adicionado: {nome} ({ip}:{porta})")
+                
+                aviso = f"[SISTEMA] Novo peer adicionado: {nome} ({ip}:{porta})"
+                print(aviso)
+
+                # Envia a mensagem para todos os outros peers
+                for peer_ip, peer_porta in self.peers:
+                    if (peer_ip, peer_porta) != (self.ip, self.porta) and (peer_ip, peer_porta) != (ip, porta):
+                        Thread(target=self.cliente, args=(peer_ip, peer_porta, aviso), daemon=True).start()
 
                 # Atribui ID único
                 if novo_peer not in self.mapa_ids:
@@ -92,8 +99,8 @@ class Peer:
                     nome_removido = self.mapa_nomes.get((ip, porta), "Desconhecido")
                     print(f"[SISTEMA] Peer removido: {nome_removido} ({ip}:{porta})")
                     self.mapa_nomes.pop((ip, porta), None)
-            else:
-                print("[SISTEMA] Lista de peers atualizada.")
+            # else:
+            #     print("[SISTEMA] Lista de peers atualizada.")
 
         elif msg.startswith("HEARTBEAT "):
             _, ip, porta = msg.split()
@@ -124,7 +131,7 @@ class Peer:
                 dados = json.loads(json_dados)
                 self.mapa_ids = {tuple(eval(k)): v for k, v in dados.get("ids", {}).items()}
                 self.mapa_nomes = {tuple(eval(k)): v for k, v in dados.get("nomes", {}).items()}
-                print(f"[SISTEMA] Mapas de IDs e nomes atualizados.")
+                # print(f"[SISTEMA] Mapas de IDs e nomes atualizados.")
             except Exception as e:
                 print(f"[ERRO] Falha ao processar MAP_UPDATE: {e}")
 
@@ -220,14 +227,14 @@ class Peer:
                 pass
 
         if not recebeu_resposta:
-            print(f"[ELEIÇÃO] Nenhum peer com ID maior respondeu. {self.nome} torna-se coordenador.")
+            #print(f"[ELEIÇÃO] Nenhum peer com ID maior respondeu. {self.nome} torna-se coordenador.")
             self.coordenador = True
             self.coordenador_atual = (self.ip, self.porta)
-            self.recalcular_ids()
             self.anunciar_coordenador()
+            self.recalcular_ids()
             Thread(target=self.enviar_heartbeat_coordenador, daemon=True).start()
-        else:
-            print("[ELEIÇÃO] Esperando peers de ID maior decidirem...")
+        # else:
+        #     print("[ELEIÇÃO] Esperando peers de ID maior decidirem...")
 
     def recalcular_ids(self):
         print("[SISTEMA] Recalculando IDs após eleição...")
@@ -245,13 +252,13 @@ class Peer:
             novos_ids[(self.ip, self.porta)] = 0
         self.mapa_ids = novos_ids
         self.proximo_id = maior_id + 1
-        print(f"[SISTEMA] IDs recalculados. Próximo ID disponível: {self.proximo_id}")
+        print(f"[SISTEMA] IDs recalculados.")
 
     def tratar_eleicao(self, msg):
         _, id_origem = msg.split()
         id_origem = int(id_origem)
         if self.id > id_origem:
-            print(f"[ELEIÇÃO] Recebi eleição de ID menor ({id_origem}). Meu ID {self.id} é maior.")
+            #print(f"[ELEIÇÃO] Recebi eleição de ID menor ({id_origem}). Meu ID {self.id} é maior.")
             Thread(target=self.iniciar_eleicao, daemon=True).start()
 
     def anunciar_coordenador(self):
@@ -259,7 +266,7 @@ class Peer:
         for ip, porta in self.peers:
             if (ip, porta) != (self.ip, self.porta):
                 Thread(target=self.cliente, args=(ip, porta, msg), daemon=True).start()
-        print(f"[ELEIÇÃO] {self.nome} ({self.ip}:{self.porta}) é o novo coordenador!")
+        print(f"[ELEIÇÃO] Você ({self.ip}:{self.porta}) é o novo coordenador!")
 
     def tratar_novo_coordenador(self, msg):
         _, ip, porta, nome = msg.split()
@@ -402,6 +409,12 @@ class Peer:
         else:
             print("\n[SISTEMA] Boas vindas ao chat!\nDigite 'LIST' para ver peers (nome, ID, IP e porta) ou 'EXIT' para sair.\n")
 
+        # === Palavras reservadas que não devem ser enviadas ===
+        comandos_reservados = {
+            "JOIN", "UPDATE", "ELECTION", "COORDINATOR", "HEARTBEAT",
+            "EXIT", "MAP_UPDATE", "REMOVE_COORDINATOR", "START_ELECTION"
+        }
+
         while True:
             try:
                 entrada = input("")
@@ -414,6 +427,10 @@ class Peer:
                         id = self.mapa_ids.get(peer, None)
                         print(f"{nome} [{id}] -> {peer}")
                 elif entrada.strip():
+                    primeira_palavra = entrada.strip().split()[0].upper()
+                    if primeira_palavra in comandos_reservados:
+                        print(f"[ERRO] '{primeira_palavra}' é uma palavra reservada do sistema. Use outro texto.")
+                        continue
                     self.enviar_mensagem(entrada)
             except KeyboardInterrupt:
                 self.encerrar()
