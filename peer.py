@@ -9,31 +9,32 @@ import sys
 # Constante usada para verificar se um peer digitou 'EXIT' para sair
 EXITING = False
 
-# ============================================================
-# Classe usada para representar os peers
-# ============================================================
+# =======================================================================
+# Classe usada para representar e gerenciar peers, incluindo comunicação,
+# coordenação, eleição e monitoramento por heartbeat
+# =======================================================================
 class Peer:
     # ============================================================
     # Construtor da classe Peer
     # ============================================================
     def __init__(self, nome, ip, porta):
-        self.nome = nome
-        self.ip = ip
-        self.porta = porta
-        self.id = None
-        self.coordenador = False
+        self.nome = nome  # nome de usuário do peer
+        self.ip = ip  # endereço IP do peer (sempre 'localhost' neste programa)
+        self.porta = porta  # porta do peer (cada peer deve ter uma porta diferente)
+        self.id = None  # identificador único do peer dentro do chat atual (atribuído pelo coordenador)
+        self.coordenador = False  # verifica se o próprio peer (self) é coordenador
         self.peers = []  # lista de (ip, porta)
-        self.mapa_ids = {}      # mapeia (ip, porta) -> id
-        self.mapa_nomes = {}    # mapeia (ip, porta) -> nome
-        self.proximo_id = 1
-        self.ultima_atividade = {}
-        self.server_socket = None
-        self.coordenador_atual = None
-        self.em_eleicao = False
+        self.mapa_ids = {}  # mapeia (ip, porta) -> id
+        self.mapa_nomes = {}  # mapeia (ip, porta) -> nome
+        self.proximo_id = 1  # usado apenas pelo coordenador para atribuir IDs únicos a novos peers
+        self.ultima_atividade = {}  # mapeia (ip, porta) -> momento (time.time()) da última atividade
+        self.server_socket = None  # socket de servidor do peer
+        self.coordenador_atual = None  # salva o coordenador atual de um chat
+        self.em_eleicao = False  # verifica se o peer está em eleição no momento
 
-    # ============================================================
-    # Inicia o servidor e mantém ele ativo
-    # ============================================================
+    # ===========================================================================
+    # Inicia o servidor, mantém ele ativo e escuta novas conexões de outros peers
+    # ===========================================================================
     def inicia_servidor(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.bind((self.ip, self.porta))
@@ -52,9 +53,10 @@ class Peer:
             finally:
                 client_socket.close()
     
-    # ==========================================================================
-    # Tratamento de mensagens reservadas, que não podem ser enviadas pelos peers
-    # ==========================================================================
+    # =====================================================================================
+    # Trata todas as mensagens recebidas — tanto mensagens de controle (JOIN, UPDATE, etc.)
+    # quanto mensagens de chat enviadas pelos peers
+    # =====================================================================================
     def tratar_mensagem(self, msg, conn):
         if msg.startswith("JOIN "):
             _, ip, porta, nome = msg.split()
@@ -158,9 +160,9 @@ class Peer:
             if msg.strip():  # só mostra se não for vazio
                 print(f"\n> {msg}")
 
-    # ==========================================================================
-    # Função usada para enviar mensagens dos peers e mensagens reservadas também
-    # ==========================================================================
+    # ========================================================================================
+    # Envia mensagens para outros peers (tanto mensagens do chat quanto mensagens de controle)
+    # ========================================================================================
     def cliente(self, ip, porta, mensagem, wait_response=False):
         s = None
         try:
@@ -178,9 +180,9 @@ class Peer:
             if s:
                 s.close()
 
-    # ===========================================================================
-    # Notifica peers para atualizar a lista de peers quando ela sofrer alterações
-    # ===========================================================================
+    # ===============================================================================
+    # Notifica todos os peers, enviando a lista de peers atualizada (mensagem UPDATE)
+    # ===============================================================================
     def notificar_peers(self):
         lista_serializada = json.dumps(self.peers)
         msg = f"UPDATE {lista_serializada}"
@@ -192,7 +194,6 @@ class Peer:
     # Envia mapas de IDs e nomes para todos os peers
     # ==========================================================
     def enviar_mapas_para_peers(self):
-        #Envia mapas de IDs e nomes para todos os peers.
         try:
             dados = {
                 "ids": {str(k): v for k, v in self.mapa_ids.items()},
@@ -353,7 +354,7 @@ class Peer:
             Thread(target=self.monitorar_coordenador, daemon=True).start()
 
     # ============================================================
-    # INTERFACE
+    # Inicia a conexão de um peer com um chat
     # ============================================================
     def iniciar(self):
         global EXITING
