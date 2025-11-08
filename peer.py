@@ -6,9 +6,16 @@ import atexit
 import signal
 import sys
 
+# Constante usada para verificar se um peer digitou 'EXIT' para sair
 EXITING = False
 
+# ============================================================
+# Classe usada para representar os peers
+# ============================================================
 class Peer:
+    # ============================================================
+    # Construtor da classe Peer
+    # ============================================================
     def __init__(self, nome, ip, porta):
         self.nome = nome
         self.ip = ip
@@ -25,7 +32,7 @@ class Peer:
         self.em_eleicao = False
 
     # ============================================================
-    # SERVIDOR
+    # Inicia o servidor e mantém ele ativo
     # ============================================================
     def inicia_servidor(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -45,9 +52,9 @@ class Peer:
             finally:
                 client_socket.close()
     
-    # ============================================================
-    # TRATAMENTO DE MENSAGENS
-    # ============================================================
+    # ==========================================================================
+    # Tratamento de mensagens reservadas, que não podem ser enviadas pelos peers
+    # ==========================================================================
     def tratar_mensagem(self, msg, conn):
         if msg.startswith("JOIN "):
             _, ip, porta, nome = msg.split()
@@ -99,8 +106,6 @@ class Peer:
                     nome_removido = self.mapa_nomes.get((ip, porta), "Desconhecido")
                     print(f"[SISTEMA] Peer removido: {nome_removido} ({ip}:{porta})")
                     self.mapa_nomes.pop((ip, porta), None)
-            # else:
-            #     print("[SISTEMA] Lista de peers atualizada.")
 
         elif msg.startswith("HEARTBEAT "):
             _, ip, porta = msg.split()
@@ -131,7 +136,6 @@ class Peer:
                 dados = json.loads(json_dados)
                 self.mapa_ids = {tuple(eval(k)): v for k, v in dados.get("ids", {}).items()}
                 self.mapa_nomes = {tuple(eval(k)): v for k, v in dados.get("nomes", {}).items()}
-                # print(f"[SISTEMA] Mapas de IDs e nomes atualizados.")
             except Exception as e:
                 print(f"[ERRO] Falha ao processar MAP_UPDATE: {e}")
 
@@ -154,9 +158,9 @@ class Peer:
             if msg.strip():  # só mostra se não for vazio
                 print(f"\n> {msg}")
 
-    # ============================================================
-    # CLIENTE
-    # ============================================================
+    # ==========================================================================
+    # Função usada para enviar mensagens dos peers e mensagens reservadas também
+    # ==========================================================================
     def cliente(self, ip, porta, mensagem, wait_response=False):
         s = None
         try:
@@ -174,18 +178,21 @@ class Peer:
             if s:
                 s.close()
 
-    # ============================================================
-    # NOTIFICAÇÃO
-    # ============================================================
-    def notificar_peers(self, novo_peer):
+    # ===========================================================================
+    # Notifica peers para atualizar a lista de peers quando ela sofrer alterações
+    # ===========================================================================
+    def notificar_peers(self):
         lista_serializada = json.dumps(self.peers)
         msg = f"UPDATE {lista_serializada}"
         for ip, porta in self.peers:
             if (ip, porta) != (self.ip, self.porta):
                 Thread(target=self.cliente, args=(ip, porta, msg), daemon=True).start()
 
+    # ==========================================================
+    # Envia mapas de IDs e nomes para todos os peers
+    # ==========================================================
     def enviar_mapas_para_peers(self):
-        """Envia mapas de IDs e nomes para todos os peers."""
+        #Envia mapas de IDs e nomes para todos os peers.
         try:
             dados = {
                 "ids": {str(k): v for k, v in self.mapa_ids.items()},
@@ -199,9 +206,9 @@ class Peer:
         except Exception as e:
             print(f"[ERRO] Falha ao enviar mapas: {e}")
 
-    # ============================================================
-    # ELEIÇÃO (BULLY)
-    # ============================================================
+    # ===========================================================================
+    # ELEIÇÃO (BULLY) - Funções auxiliares para eleição usando algoritmo valentão
+    # ===========================================================================
     def iniciar_eleicao(self):
         if self.em_eleicao or self.id is None:
             return
@@ -227,14 +234,11 @@ class Peer:
                 pass
 
         if not recebeu_resposta:
-            #print(f"[ELEIÇÃO] Nenhum peer com ID maior respondeu. {self.nome} torna-se coordenador.")
             self.coordenador = True
             self.coordenador_atual = (self.ip, self.porta)
             self.anunciar_coordenador()
             self.recalcular_ids()
             Thread(target=self.enviar_heartbeat_coordenador, daemon=True).start()
-        # else:
-        #     print("[ELEIÇÃO] Esperando peers de ID maior decidirem...")
 
     def recalcular_ids(self):
         print("[SISTEMA] Recalculando IDs após eleição...")
@@ -258,7 +262,6 @@ class Peer:
         _, id_origem = msg.split()
         id_origem = int(id_origem)
         if self.id > id_origem:
-            #print(f"[ELEIÇÃO] Recebi eleição de ID menor ({id_origem}). Meu ID {self.id} é maior.")
             Thread(target=self.iniciar_eleicao, daemon=True).start()
 
     def anunciar_coordenador(self):
@@ -275,9 +278,9 @@ class Peer:
         self.em_eleicao = False
         print(f"[ELEIÇÃO] Novo coordenador eleito: {nome} ({ip}:{porta})")
 
-    # ============================================================
-    # HEARTBEAT
-    # ============================================================
+    # ===============================================================================
+    # HEARTBEAT - envia heartbeat aos outros peers, para indicar que ainda está ativo
+    # ===============================================================================
     def enviar_heartbeat_coordenador(self):
         while self.coordenador:
             for ip, porta in list(self.peers):
@@ -292,9 +295,9 @@ class Peer:
                 self.cliente(ip, porta, f"HEARTBEAT {self.ip} {self.porta}")
             time.sleep(5)
 
-    # ============================================================
-    # MONITORAMENTO
-    # ============================================================
+    # =========================================================================
+    # Monitora heartbeat do coordenador, para confirmar se ele ainda está ativo
+    # =========================================================================
     def monitorar_coordenador(self):
         while True:
             if self.coordenador_atual:
@@ -314,15 +317,15 @@ class Peer:
                             except Exception:
                                 pass
 
-                    # Agora inicia a eleição localmente
+                    # Inicia a eleição localmente
                     Thread(target=self.iniciar_eleicao, daemon=True).start()
                     # Para evitar múltiplos disparos
                     time.sleep(5)
             time.sleep(2)
 
-    # ============================================================
-    # INICIALIZAÇÃO
-    # ============================================================
+    # ===================================================================
+    # Inicia rede para um peer, permitindo que inicie ou entre em um chat
+    # ===================================================================
     def iniciar_rede(self):
         if not self.peers:
             self.coordenador = True
@@ -384,12 +387,12 @@ class Peer:
                     s.close()
 
                     if resultado == 0:
-                        # Conexão bem-sucedida → coordenador existente
+                        # Conexão bem-sucedida -> coordenador existente
                         print(f"[SISTEMA] Coordenador encontrado em localhost:{porta}.")
                         time.sleep(1)
                         self.peers.append(('localhost', porta))
                     else:
-                        # Ninguém ouvindo → cria rede própria
+                        # Ninguém ouvindo -> cria rede própria
                         print(f"[SISTEMA] Nenhum coordenador encontrado na porta {porta}. Criando rede própria para {self.nome}...")
                     break
 
@@ -409,7 +412,7 @@ class Peer:
         else:
             print("\n[SISTEMA] Boas vindas ao chat!\nDigite 'LIST' para ver peers (nome, ID, IP e porta) ou 'EXIT' para sair.\n")
 
-        # === Palavras reservadas que não devem ser enviadas ===
+        # Palavras reservadas que não devem ser enviadas
         comandos_reservados = {
             "JOIN", "UPDATE", "ELECTION", "COORDINATOR", "HEARTBEAT",
             "EXIT", "MAP_UPDATE", "REMOVE_COORDINATOR", "START_ELECTION"
@@ -436,7 +439,7 @@ class Peer:
                 self.encerrar()
 
     # ============================================================
-    # ENVIO DE MENSAGENS
+    # Envia mensagens, permitidas pelo sistema, para o chat
     # ============================================================
     def enviar_mensagem(self, mensagem):
         for ip, porta in self.peers:
@@ -449,9 +452,9 @@ class Peer:
                     args=(ip, porta, f"Você [{self.id}]: {mensagem}"),
                     daemon=True).start()
 
-    # ============================================================
-    # ENCERRAMENTO
-    # ============================================================
+    # ========================================================================
+    # Encerra conexão do peer com a rede, saindo do chat e encerrando programa
+    # ========================================================================
     def encerrar(self, via_exit=False):
         print(f"\n[SISTEMA] {self.nome} encerrando...")
         msg = f"EXIT {self.ip} {self.porta} {self.nome}"
@@ -464,7 +467,7 @@ class Peer:
             else:
                 print("[SISTEMA] Coordenador saindo voluntariamente — escolhendo sucessor...")
 
-                # 1) Remove-se das estruturas locais (não será mais candidato)
+                # Remove-se das estruturas locais (não será mais candidato)
                 if (self.ip, self.porta) in self.peers:
                     try:
                         self.peers.remove((self.ip, self.porta))
@@ -473,14 +476,12 @@ class Peer:
                 self.mapa_ids.pop((self.ip, self.porta), None)
                 self.mapa_nomes.pop((self.ip, self.porta), None)
 
-                # 2) Notifica todos os peers com a lista atualizada e o mapa atualizado
+                # Notifica todos os peers com a lista atualizada e o mapa atualizado
                 # (assim todos sabem que o coordenador saiu e não o considerarão candidato)
                 self.notificar_peers(None)            # envia UPDATE com nova self.peers
                 self.enviar_mapas_para_peers()        # envia MAP_UPDATE com mapa sem o antigo coordenador
 
-                # 3) Peça explicitamente que os outros iniciem eleição
-                #    (você poderia confiar apenas em monitoramento/heartbeat, 
-                #     mas assim forçamos eleição imediata)
+                # Pede explicitamente que os outros iniciem eleição
                 for ip, porta in list(self.peers):
                     if (ip, porta) != (self.ip, self.porta):
                         try:
@@ -488,14 +489,14 @@ class Peer:
                         except:
                             pass
 
-                # 4) marca que não é mais coordenador e sai
+                # Marca que não é mais coordenador e sai
                 self.coordenador = False
                 self.em_eleicao = False
 
-                # dá um pequeno tempo para pedidos serem enviados
+                # Dá um pequeno tempo para pedidos serem enviados
                 time.sleep(0.5)
 
-                # não continua participando da eleição localmente (já saiu)
+                # Não continua participando da eleição localmente (já saiu)
                 # e retorna para encerrar normalmente (não envia EXIT pois já fez UPDATE)
                 print("[SISTEMA] Transferência solicitada — finalizando processo do coordenador.")
                 return
@@ -511,7 +512,7 @@ class Peer:
             sys.exit(0)
 
 # ============================================================
-# DISPONIBLIDADE DE PORTA
+# Verifica disponibilidade e validação da porta
 # ============================================================
 def porta_disponivel(porta):
     """Verifica se a porta é válida e está livre para uso."""
@@ -533,7 +534,7 @@ def porta_disponivel(porta):
             return False
 
 # ============================================================
-# MAIN
+# Função main
 # ============================================================
 def main():
     global EXITING
@@ -566,14 +567,6 @@ def main():
 
     def sair_exit():
         p.encerrar(via_exit=True)
-        #sys.exit(0)
-
-    # try:
-    #     signal.signal(signal.SIGINT, sair_falha)
-    # except KeyboardInterrupt:
-    #     signal.signal(signal.SIGINT, sair_falha)
-    # finally:
-    #     atexit.register(sair_exit)
 
     p.iniciar()
 
@@ -581,14 +574,6 @@ def main():
         signal.signal(signal.SIGINT, sair_falha)
     else:
         atexit.register(sair_exit)
-    
-
-    # try:
-    #     signal.signal(signal.SIGTERM, sair_graciosamente) # kill PID
-    # except KeyboardInterrupt:
-    #     signal.signal(signal.SIGINT, sair_graciosamente)  # Ctrl+C
-    # finally:
-    #     atexit.register(p.encerrar,via_exit=True)
 
 if __name__ == "__main__":
     main()
