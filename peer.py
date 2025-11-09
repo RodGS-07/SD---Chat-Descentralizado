@@ -183,7 +183,7 @@ class Peer:
     # ===============================================================================
     # Notifica todos os peers, enviando a lista de peers atualizada (mensagem UPDATE)
     # ===============================================================================
-    def notificar_peers(self):
+    def notificar_peers(self, outro_peer):
         lista_serializada = json.dumps(self.peers)
         msg = f"UPDATE {lista_serializada}"
         for ip, porta in self.peers:
